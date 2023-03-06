@@ -10,8 +10,8 @@ import gurobipy as grb
 import chsvi.presolve
 
 class OptimizationError(Exception):
-    """Raised when gurobi got some internal error that 
-    can happen, although rarely
+    """Raised when gurobi got some internal error that cause the 
+    optimization process to fail
     """
     pass
 
@@ -29,12 +29,11 @@ class OptimizationModel():
 
     def addLEConstr(self, expr, rhs):
         """Add a constraint expr <= rhs"""
-        constrname = "c{0}:{1:.3f}".format(self.constrcounter, rhs)
-        handle = self.grbmodel.addConstr(expr <= rhs, name=constrname)
-        self.constrbank[constrname] = (expr, rhs, handle)
+        handle = self.grbmodel.addConstr(expr <= rhs)
+        self.constrbank[self.constrcounter] = (expr, rhs, handle)
         self.constrcounter += 1
 
-        if self.numconstr >= 1.2 * self.prevnumconstr + 50:
+        if self.numconstr >= 1.5 * self.prevnumconstr + 500:
             self.reorganize()
 
     def solve(self, expr, uberr=True):
@@ -55,16 +54,16 @@ class OptimizationModel():
     def reorganize(self):
         """Remove redundant constraints"""
         # print("OptimizationModel {0} reorganizing...".format(self.grbmodel.ModelName))
-        allconstrs = list(self.constrbank.keys())
-        for constrname in allconstrs:
-            expr, rhs, handle = self.constrbank[constrname]
+        allconstrs = sorted(self.constrbank.keys()) # earlier constraints more loose?
+        for i in allconstrs:
+            expr, rhs, handle = self.constrbank[i]
             self.grbmodel.remove(handle)
             new_rhs = self.solve(expr, uberr=False) # find maximum if constraint isn't there
             if new_rhs <= rhs: # constraint is redundant!
-                del self.constrbank[constrname]
+                del self.constrbank[i]
             else: # constraint is important add it back
-                handle = self.grbmodel.addConstr(expr <= rhs, name=constrname)
-                self.constrbank[constrname] = (expr, rhs, handle)
+                handle = self.grbmodel.addConstr(expr <= rhs)
+                self.constrbank[i] = (expr, rhs, handle)
         self.prevnumconstr = self.numconstr
 
     @property
@@ -73,7 +72,11 @@ class OptimizationModel():
 
 
 class UBOptimizationModel(OptimizationModel):
-    """Optimization Models used by stage 0, 1, 2 of upper bound update"""
+    """Optimization Models used by stage 0, 1, 2 of upper bound update
+
+    This class make use of the CPOMDP model only through S, A, M. No
+    observation or transition probability are used here. 
+    """
     def __init__(self, Model, stage, res):
         super(UBOptimizationModel, self).__init__(
             "upper bound {0}".format(stage)
@@ -138,7 +141,7 @@ class UpperBound():
     
     Using three OptimizationModel object to deal with optimization problems
     """
-    def __init__(self, Model, t0=time.time(), presolveres=None):
+    def __init__(self, Model, t0, presolveres=None):
         self.Model = Model
         self.t0 = t0
 
@@ -222,7 +225,7 @@ class LowerBound():
         At stage i, alp[i-1] is updated using alp[i]
     """
 
-    def __init__(self, Model, t0=time.time()):
+    def __init__(self, Model, t0):
         self.Model = Model
         self.t0 = t0
         # shapes = [
@@ -323,12 +326,18 @@ class LowerBound():
 
 
 class CHSVI():
-    def __init__(self, Model, epsilon=None, t0=time.time(), presolveres=None):
+    def __init__(self, Model, epsilon=None, t0=None, presolveres=None):
+        if t0 is None:
+            self.t0 = time.time()
+        else:
+            self.t0 = t0
         self.Model = Model
-        self.VU = UpperBound(
-            self.Model, t0=t0, presolveres=presolveres
-        )
-        self.VL = LowerBound(self.Model, t0=t0)
+        if isinstance(presolveres, UpperBound):
+            self.VU = presolveres
+            self.VU.Model = Model
+        else:
+            self.VU = UpperBound(Model, self.t0, presolveres=presolveres)
+        self.VL = LowerBound(Model, self.t0)
         self.b0 = self.Model.b0
         self.anytime = (epsilon is None)
         self.epsilon = 0.95 * (
@@ -338,7 +347,6 @@ class CHSVI():
         self.pathcount = 0
         self.nodecount = 0
         self.prevnodecount = 0
-        self.t0 = t0
         self.timeheuristic = 0.0
         print("[{0:.3f}s] Initialization complete!".format(time.time() - self.t0))
         
@@ -352,7 +360,7 @@ class CHSVI():
                 vu, vl = self.VU[self.b0], self.VL[self.b0]
                 gap = vu - vl
                 if self.anytime:
-                    self.epsilon = 0.95 * gap
+                    self.epsilon = 0.85 * gap
                 print(
                     ("[{0:.3f}s] {1} calls at root, {2} total calls, " + 
                     "LB: {3:.6f}, UB: {4:.6f}, gap: {5:.6f}").format(
@@ -506,6 +514,7 @@ def CoordinatorsHeuristicSearchValueIteration(
     #     Model, timeout=presolvetime, calllimit=presolvecalllimit
     # )
     presolveres = chsvi.presolve.FullInfoMDP(Model)
+    # presolveres = None
     Solver = CHSVI(Model, epsilon=epsilon, t0=t0, 
         presolveres=presolveres)
     Solver.Solve(timeout)

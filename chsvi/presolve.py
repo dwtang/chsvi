@@ -1,7 +1,10 @@
-from chsvi.hsvi import POMDP, HeuristicSearchValueIteration
 import numpy as np
 import scipy.sparse as spsp
 import itertools
+
+from chsvi.hsvi import POMDP, HeuristicSearchValueIteration
+from chsvi.cpomdp import BaseCPOMDP
+
 
 def FullInfoHSVI(Model, timeout=10, calllimit=np.inf):
     """Find full information POMDP upper bound for the value functions
@@ -125,3 +128,35 @@ def FixedPrescriptionBound(Model, preset=None):
             
     return alp
 
+
+class MoreInfoCPOMDP(BaseCPOMDP):
+    def __init__(self, CPOMDP, Omap):
+        assert(Omap.size == CPOMDP.S)
+        newO = np.max(Omap) + 1
+
+        _P = spsp.coo_matrix(CPOMDP._P)
+        newP = [None for no in range(newO)]
+        # Masks = [spsp.lil_matrix(_P.shape, dtype=bool) for no in range(newO)]
+        # for no in range(newO):
+        #     for o in range(CPOMDP.O):
+        #         Masks[no][:, o * CPOMDP.S + partition[no]] = 1
+
+        newcol = [Omap[c % CPOMDP.S] * _P.shape[1] + c for c in _P.col]
+        _newP = spsp.coo_matrix((_P.data, (_P.row, newcol)), shape=_P.shape)
+
+        self.S = CPOMDP.S
+        self.I = CPOMDP.I
+        self.A = CPOMDP.A
+        self.AT = CPOMDP.AT
+        self.SA = CPOMDP.SA
+        self.M = CPOMDP.M
+        self.Mmap = CPOMDP.Mmap
+        self.Mmat = CPOMDP.Mmat
+        self.discount = CPOMDP.discount
+        self.Vmax = CPOMDP.Vmax
+        self.Vmin = CPOMDP.Vmin
+        self._r = CPOMDP._r
+        self.b0 = CPOMDP.b0
+        
+        self._P = spsp.csr_matrix(_newP)
+        self.O = newO * CPOMDP.O

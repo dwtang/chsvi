@@ -14,6 +14,7 @@ class BaseCPOMDP():
     I: number of agents
     A: tuple of number of actions for agents 
     AT: number of action vectors 
+    SA: tuple (S, *A)
     M: tuple of number of private states agents
     O: number of common observations
     Mmap: I x S numpy array describing the mapping from augmented
@@ -25,10 +26,10 @@ class BaseCPOMDP():
     _P: (S * AT) x (O * S') compressed sparse row (CSR) matrix
         (In the delay information sharing model, or in general, given
         (s, a), the distribution of (o, s') is quite sparse)
-    _r: flattened r
+    _r: (S * AT) numpy array 
 
     Methods:
-    P, Q, SAIndex, setbelief, PObg, Qbg
+    P, Q, SAIndex, SAi_Index, setbelief, PObg, Qbg
 
     """
     def __init__(self, P, Mmap, r, discount, b0=None):
