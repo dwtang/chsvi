@@ -141,6 +141,7 @@ class DelaySharingCPOMDP(BaseCPOMDP):
         self.Odims = Odims
         self.Allm = Allm
         self.Allmpair = Allmpair
+        self.Allmpairlookup = Allmpairlookup
         self.ghint = ghint
 
 

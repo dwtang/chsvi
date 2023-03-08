@@ -5,135 +5,9 @@
 import numpy as np
 from numpy.random import default_rng
 import time
-import gurobipy as grb
 
 import chsvi.presolve
-
-class OptimizationError(Exception):
-    """Raised when gurobi got some internal error that cause the 
-    optimization process to fail
-    """
-    pass
-
-class OptimizationModel():
-    """A generic gurobi model wrapper with constraint management
-
-    Every once in a while, the model removes redundant constraints
-    """
-    def __init__(self, name):
-        self.grbmodel = grb.Model(name)
-        self.grbmodel.setAttr("ModelSense", grb.GRB.MAXIMIZE)
-        self.constrbank = {}
-        self.constrcounter = 0
-        self.prevnumconstr = 0
-
-    def addLEConstr(self, expr, rhs):
-        """Add a constraint expr <= rhs"""
-        handle = self.grbmodel.addConstr(expr <= rhs)
-        self.constrbank[self.constrcounter] = (expr, rhs, handle)
-        self.constrcounter += 1
-
-        if self.numconstr >= 1.5 * self.prevnumconstr + 500:
-            self.reorganize()
-
-    def solve(self, expr, uberr=True):
-        self.grbmodel.setObjective(expr)
-        self.grbmodel.optimize()
-        if (not uberr) and (
-            self.grbmodel.Status == grb.GRB.UNBOUNDED or
-            self.grbmodel.Status == grb.GRB.INF_OR_UNBD 
-        ):
-            return np.inf
-        if self.grbmodel.Status == grb.GRB.OPTIMAL:
-            return self.grbmodel.ObjVal
-        elif self.grbmodel.Status == grb.GRB.INTERRUPTED: # user interrupt
-            raise KeyboardInterrupt
-        else:
-            raise OptimizationError(self.grbmodel.Status)
-
-    def reorganize(self):
-        """Remove redundant constraints"""
-        # print("OptimizationModel {0} reorganizing...".format(self.grbmodel.ModelName))
-        allconstrs = sorted(self.constrbank.keys()) # earlier constraints more loose?
-        for i in allconstrs:
-            expr, rhs, handle = self.constrbank[i]
-            self.grbmodel.remove(handle)
-            new_rhs = self.solve(expr, uberr=False) # find maximum if constraint isn't there
-            if new_rhs <= rhs: # constraint is redundant!
-                del self.constrbank[i]
-            else: # constraint is important add it back
-                handle = self.grbmodel.addConstr(expr <= rhs)
-                self.constrbank[i] = (expr, rhs, handle)
-        self.prevnumconstr = self.numconstr
-
-    @property
-    def numconstr(self):
-        return len(self.constrbank)
-
-
-class UBOptimizationModel(OptimizationModel):
-    """Optimization Models used by stage 0, 1, 2 of upper bound update
-
-    This class make use of the CPOMDP model only through S, A, M. No
-    observation or transition probability are used here. 
-    """
-    def __init__(self, Model, stage, res):
-        super(UBOptimizationModel, self).__init__(
-            "upper bound {0}".format(stage)
-        )
-        S = Model.S
-        S0 = res["vBarVerts"].size
-        self.isblp = stage < Model.I
-        if self.isblp: # blinear optimization for stage 0 to I-1
-            Acumprod = np.prod(Model.A[0:stage+1])
-            # prescription 
-            self.g = self.grbmodel.addMVar(
-                shape=(Model.M[stage], Model.A[stage]),
-                vtype=grb.GRB.BINARY, name="g"
-            )
-            # distribution sums up to 1
-            for m in range(Model.M[stage]):
-                self.grbmodel.addConstr(self.g[m].sum() == 1)
-            self.grbmodel.setParam("NonConvex", 2) # invoke bilinear solver
-            self.grbmodel.setParam("TimeLimit", 10) # in seconds
-        else: # stage == I
-            Acumprod = 1
-        
-        # the main variable for all problems is called y
-        self.y = self.grbmodel.addMVar(
-            shape=(S * Acumprod,),
-            vtype=grb.GRB.CONTINUOUS,
-            lb=-np.inf, name="y"
-        )
-        # auxiliary variable z(s) = max y(s, m1, m2) that can be used to
-        # represent upper bound on aggregated state belief value function
-        self.z = self.grbmodel.addMVar(
-            shape=(S0,), vtype=grb.GRB.CONTINUOUS,
-            lb=-np.inf, name="z"
-        )
-        for a in range(Acumprod):
-            self.grbmodel.addConstr(
-                self.y.reshape((S, -1))[:, a] >= res["ymin"]
-            )
-            self.grbmodel.addConstr(
-                self.y.reshape((S, -1))[:, a] <= res["A"].T @ self.z
-            )
-
-        for i in range(res["vBar"].size):
-            self.addLEConstr(res["BT"][i] @ self.z, res["vBar"][i])
-        for j in range(S0):
-            rhs = res["vBarVerts"] if isinstance(
-                res["vBarVerts"], (int, float)
-            ) else res["vBarVerts"][j] 
-            self.addLEConstr(self.z[j], rhs)
-    
-    def gsol(self):
-        """Transform from solution probability vector to prescription vector
-        """
-        if self.isblp:
-            return np.argmax(self.g.X, axis=1)
-        else:
-            return None
+from chsvi.optmodel import UBOptimizationModel, OptimizationError
 
 
 class UpperBound():
@@ -141,9 +15,8 @@ class UpperBound():
     
     Using three OptimizationModel object to deal with optimization problems
     """
-    def __init__(self, Model, t0, presolveres=None):
+    def __init__(self, Model, presolveres=None):
         self.Model = Model
-        self.t0 = t0
 
         # presolve step
         if presolveres is None:
@@ -191,9 +64,10 @@ class UpperBound():
             vb = blp.solve(objfunc)
             gb = blp.gsol()
         else: # stage == I
-            vO = np.empty(self.Model.O, dtype=np.float64)
+            vO = np.zeros(self.Model.O, dtype=np.float64)
             for o in range(self.Model.O):
-                vO[o] = blp.solve(self.Model.bgP[o] @ blp.y)
+                if self.Model.bgPO[o] > 0:
+                    vO[o] = blp.solve(self.Model.bgP[o] @ blp.y)
             vb = self.Model.Qbg(vO)
             gb = None
         
@@ -212,6 +86,18 @@ class UpperBound():
     def numpoints(self):
         return sum(p.numconstr for p in self._p)
 
+    def transfer(self, Model, Smat=None):
+        """Transfer to new model with larger state space
+
+        Model: new CPOMDP model that has fewer common info than the old one
+        Smat: S_old x Model.S 0-1 mapping matrix
+        """
+        self.Model = Model
+        if Smat is not None:  
+            for blp in self._p:
+                blp.transfer(Model, Smat)
+        self.timeupdate = 0
+
 
 class LowerBound():
     """Lower Bound Class for CHSVI
@@ -225,9 +111,8 @@ class LowerBound():
         At stage i, alp[i-1] is updated using alp[i]
     """
 
-    def __init__(self, Model, t0):
+    def __init__(self, Model):
         self.Model = Model
-        self.t0 = t0
         # shapes = [
         #     (np.prod((self.Model.S,) + self.Model.A[0:i]), self.Model.A[i], 1) 
         #     for i in range(self.Model.I)
@@ -332,12 +217,12 @@ class CHSVI():
         else:
             self.t0 = t0
         self.Model = Model
-        if isinstance(presolveres, UpperBound):
-            self.VU = presolveres
-            self.VU.Model = Model
-        else:
-            self.VU = UpperBound(Model, self.t0, presolveres=presolveres)
-        self.VL = LowerBound(Model, self.t0)
+        if isinstance(presolveres, tuple): # (UpperBound, Smat)
+            presolveres[0].transfer(Model, presolveres[1])
+            self.VU = presolveres[0]
+        else: # dictionary
+            self.VU = UpperBound(Model, presolveres=presolveres)
+        self.VL = LowerBound(Model)
         self.b0 = self.Model.b0
         self.anytime = (epsilon is None)
         self.epsilon = 0.95 * (
@@ -510,10 +395,10 @@ def CoordinatorsHeuristicSearchValueIteration(
         timeout: time limit in seconds
     """
     t0 = time.time()
-    # presolveres = chsvi.presolve.FullInfoHSVI(
-    #     Model, timeout=presolvetime, calllimit=presolvecalllimit
-    # )
-    presolveres = chsvi.presolve.FullInfoMDP(Model)
+    presolveres = chsvi.presolve.FullInfoHSVI(
+        Model, timeout=presolvetime, calllimit=presolvecalllimit
+    )
+    # presolveres = chsvi.presolve.FullInfoMDP(Model)
     # presolveres = None
     Solver = CHSVI(Model, epsilon=epsilon, t0=t0, 
         presolveres=presolveres)

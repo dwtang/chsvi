@@ -199,8 +199,28 @@ class UpperBound():
 
     def output(self):
         self.reorganize()
-        return {"BT": self.BT, "vBar": self.vBar,
-                "vBarVerts": self.vBarVerts, "Vmin": self.Vmin}
+        BT = np.concatenate((self.BT, np.eye(self.M.S)), axis=0)
+        vBar = np.concatenate((self.vBar, self.vBarVerts))
+        QBar = np.zeros((vBar.shape[0], self.M.A))
+        for i in range(BT.shape[0]):
+            self.M.setbelief(BT[i])
+            vbprime = np.zeros((self.M.A, self.M.O))
+            for a in range(self.M.A):
+                for o in range(self.M.O):
+                    next_b = self.M.nextbelief(a, o)
+                    if next_b is not None:
+                        vbprime[a, o] = self.access_lp(next_b)
+            QBar[i, :] = self.M.Q(vbprime)
+
+        Qmin = self.M.rPlusGammaTimes(self.M.PT @ self.Vmin)
+
+        return {
+            "BT": BT,
+            "vBar": vBar,
+            "QBar": QBar,
+            "vmin": self.Vmin,
+            "Qmin": Qmin
+        }
 
 
 class LowerBound():

@@ -12,7 +12,7 @@ def FullInfoHSVI(Model, timeout=10, calllimit=np.inf):
     Input: 
         Model: a BaseCPOMDP instance with a relaxedPOMDP method that
         returns a POMDP model (if the relaxed POMDP is actually an
-        MDP please use MDPUpperBound instead)
+        MDP please use FullInfoMDP instead)
     """
 
     # Create a POMDP model assuming information are shared without delay
@@ -26,14 +26,16 @@ def FullInfoHSVI(Model, timeout=10, calllimit=np.inf):
     
     print(info)
 
-    FIModel, Amat = Model.relaxedPOMDP() # a pomdp
+    FIModel, Smat = Model.relaxedPOMDP() # a pomdp
     res = HeuristicSearchValueIteration(FIModel, 
         timeout=timeout, calllimit=calllimit, ret="UB")
 
-    res["A"] = Amat
-    res["ymin"] = Amat.T @ res["Vmin"]
+    res["Smat"] = Smat
+    res["QBar"] = res["QBar"].reshape((-1, *Model.A))
+    res["Qmin"] = res["Qmin"].reshape((-1, *Model.A))
+    # res["ymin"] = Smat.T @ res["vmin"]
 
-    return res # dict with keys "A", "BT", "vBar", "vBarVerts", "ymin"
+    return res # dict with keys "Smat", "BT", "vBar", "QBar", "vmin", "Qmin" 
 
 def FullInfoMDP(Model):
     FIModel, Amat = Model.relaxedPOMDP() # could be a pomdp or mdp
@@ -100,6 +102,8 @@ def FixedPrescriptionBound(Model, preset=None):
     ]
 
     for j in range(num_pres):
+        if j % 10 == 0:
+            print("working on prescription #{0}".format(j))
         lin_idx = Model.SAIndex(preset[j])
         alpj = Model.Vmin * np.ones(Model.S)
         while True:
@@ -142,7 +146,10 @@ class MoreInfoCPOMDP(BaseCPOMDP):
         #         Masks[no][:, o * CPOMDP.S + partition[no]] = 1
 
         newcol = [Omap[c % CPOMDP.S] * _P.shape[1] + c for c in _P.col]
-        _newP = spsp.coo_matrix((_P.data, (_P.row, newcol)), shape=_P.shape)
+        _newP = spsp.coo_matrix(
+            (_P.data, (_P.row, newcol)), 
+            shape=(_P.shape[0], _P.shape[1] * newO)
+        )
 
         self.S = CPOMDP.S
         self.I = CPOMDP.I
