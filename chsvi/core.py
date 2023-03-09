@@ -21,11 +21,10 @@ class UpperBound():
         # presolve step
         if presolveres is None:
             presolveres = {
-                "A": np.ones((1, self.Model.S)),
-                "BT": np.zeros((0, 1)),
-                "vBar": np.zeros((0)),
-                "vBarVerts": Model.Vmax,
-                "ymin": Model.Vmin
+                "Smat": None,
+                "BT": np.eye(Model.S),
+                "QBar": np.full((Model.S, *Model.A), Model.Vmax),
+                "Qmin": np.full((Model.S, *Model.A), Model.Vmin)
             }
         # return a point-based upper bound on the for certain
         # aggregated belief points (i.e. the belief on aggregated state)
