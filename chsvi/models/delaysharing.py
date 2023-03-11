@@ -140,7 +140,9 @@ class DelaySharingCPOMDP(BaseCPOMDP):
         self.Sdims = (S, MT)
         self.Odims = Odims
         self.Allm = Allm
-        self.Allmpair = Allmpair
+        self.Allmpair = Allmpair # list of m pairs,
+        # each m pair is a tuple (m0, ... tI-1) where
+        # m0 = (za_{-d}, ..., za_{-1}), za_l is the z * Ai + ai l steps ago
         self.Allmpairlookup = Allmpairlookup
         self.ghint = ghint
 
@@ -161,6 +163,12 @@ class DelaySharingCPOMDP(BaseCPOMDP):
             return (-1, -1)
         else:
             return np.unravel_index(o-1, self.Odims)
+
+    def negate(self):
+        self.original_params["r"] = -self.original_params["r"]
+        self._r = -self._r
+        self.Vmin = np.min(self._r) / (1 - self.discount)
+        self.Vmax = np.max(self._r) / (1 - self.discount)
 
     def relaxedPOMDP(self):
         """Returns the full information POMDP

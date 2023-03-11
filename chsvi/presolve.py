@@ -27,13 +27,21 @@ def FullInfoHSVI(Model, timeout=10, calllimit=np.inf):
     print(info)
 
     FIModel, Smat = Model.relaxedPOMDP() # a pomdp
-    res = HeuristicSearchValueIteration(FIModel, 
+    resmax = HeuristicSearchValueIteration(FIModel, 
+        timeout=timeout, calllimit=calllimit, ret="UB")
+    FIModel.negate()
+    resmin = HeuristicSearchValueIteration(FIModel, 
         timeout=timeout, calllimit=calllimit, ret="UB")
 
-    res["Smat"] = Smat
-    res["QBar"] = res["QBar"].reshape((-1, *Model.A))
-    res["Qmin"] = res["Qmin"].reshape((-1, *Model.A))
-    # res["ymin"] = Smat.T @ res["vmin"]
+    res = {
+        "Smat": Smat,
+        "LHS": np.concatenate((resmax["BT"], -resmin["BT"]), axis=0),
+        "RHS": np.concatenate(
+            (resmax["QBar"].reshape((-1, *Model.A)), # Vmax x A
+            resmin["QBar"].reshape((-1, *Model.A))), # Vmin x A
+            axis=0
+        )
+    }
 
     return res # dict with keys "Smat", "BT", "vBar", "QBar", "vmin", "Qmin" 
 
@@ -43,12 +51,11 @@ def FullInfoMDP(Model):
     Vub = ValueIteration(FIModel)
     Vlb = ValueIteration(FIModel, maximizing=False)
     
+    # TODO: change this to new interface
     res = {
-        "A": Amat,
-        "BT": np.zeros((0, FIModel.S)),
-        "vBar": np.zeros((0)),
-        "vBarVerts": Vub,
-        "ymin": Amat.T @ Vlb
+        "Smat": Amat,
+        "LHS": np.eye(FIModel.S),
+        "RHS": Vub,
     }
     return res
 

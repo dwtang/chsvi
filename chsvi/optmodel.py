@@ -76,6 +76,11 @@ class UBOptimizationModel(OptimizationModel):
 
     This class make use of the CPOMDP model only through S, A, M. No
     observation or transition probability are used here. 
+
+    Model: a CPOMDP model
+    stage: integer
+    res: a dictionary with field "Smat", "LHS", "RHS"
+    privcompress: private information compression map is a Mi numpy array
     """
     def __init__(self, Model, stage, res):
         super().__init__(
@@ -101,6 +106,7 @@ class UBOptimizationModel(OptimizationModel):
                 self.gconstr.append(self.grbmodel.addConstr(
                     self.g[m].sum() == 1
                 ))
+
             self.grbmodel.setParam("NonConvex", 2) # invoke bilinear solver
             self.grbmodel.setParam("TimeLimit", 10) # in seconds
         else: # stage == I
@@ -115,38 +121,41 @@ class UBOptimizationModel(OptimizationModel):
         # auxiliary variable z(s) = max y(s, m1, m2) that can be used to
         # represent upper bound on aggregated state belief value function
         if res["Smat"] is None:
-            z = self.y
+            zmax = self.y.reshape((S0, Acumprod))
+            zmin = self.y.reshape((S0, Acumprod))
         else:
-            z = self.grbmodel.addMVar(
-                shape=(S0 * Acumprod,), vtype=grb.GRB.CONTINUOUS,
-                lb=-np.inf, name="z"
+            zmax = self.grbmodel.addMVar(
+                shape=(S0, Acumprod), vtype=grb.GRB.CONTINUOUS,
+                lb=-np.inf, name="zmax"
             )
-        numbelief = res["QBar"].shape[0]
-        QBar = res["QBar"].reshape((numbelief, Acumprod, -1))
-        QBarstage = np.max(QBar, axis=-1)
+            zmin = self.grbmodel.addMVar(
+                shape=(S0, Acumprod), vtype=grb.GRB.CONTINUOUS,
+                lb=-np.inf, name="zmin"
+            )
+            
+        numpoints = res["LHS"].shape[0]
+        Qmax = res["RHS"].reshape((numpoints, Acumprod, -1))
+        Qmaxstage = np.max(Qmax, axis=-1)
 
-        Qmin = res["Qmin"].reshape((S0, Acumprod, -1))
-        Qminstage = np.min(Qmin, axis=-1)
-        if res["Smat"] is None:
-            self.ymin = Qminstage
-        else:
-            self.ymin = res["Smat"].T @ Qminstage # S x Acumprod
-
-        self.grbmodel.addConstr(
-            self.y.reshape((S, -1)) >= self.ymin
-        )
         if res["Smat"] is not None:
             self.grbmodel.addConstr(
                 self.y.reshape((S, -1)) <= 
-                res["Smat"].T @ z.reshape((S0, -1))
+                res["Smat"].T @ zmax
+            )
+            self.grbmodel.addConstr(
+                self.y.reshape((S, -1)) >= 
+                res["Smat"].T @ zmin
             )
 
-        for i in range(numbelief):
+        for i in range(numpoints):
+            bplus = res["LHS"][i] * (res["LHS"][i] > 0)
+            bminus = res["LHS"][i] * (res["LHS"][i] < 0)
             for a in range(Acumprod):
-                self.addLEConstr(
-                    res["BT"][i] @ z.reshape((S0, -1))[:, a],
-                    QBarstage[i, a]
-                )
+                # bz = [(res["LHS"][i, s] * zmax[s, a] 
+                #       if res["LHS"][i, s] > 0 else 
+                #       res["LHS"][i, s] * zmin[s, a]) for s in range(S0)]
+                self.addLEConstr(bplus @ zmax[:, a] + bminus @ zmin[:, a], Qmaxstage[i, a])
+
     
     def gsol(self):
         """Transform from solution probability vector to prescription vector
@@ -162,6 +171,8 @@ class UBOptimizationModel(OptimizationModel):
         Model: new CPOMDP model that has fewer common info than the old one
         Smat: S_old x Model.S 0-1 mapping matrix
         """
+        # TODO: get rid of this function?
+
         self.reorganize()
         y_old = self.y
 
@@ -190,10 +201,9 @@ class UBOptimizationModel(OptimizationModel):
             lb=-np.inf, name="y"
         )
         # now y_old is the new auxiliary variable z
-        self.ymin = Smat.T @ self.ymin # S_new x Acumprod
         self.grbmodel.addConstr(
-            self.y.reshape((Model.S, -1)) >= self.ymin
-        )
+            self.y.reshape((Model.S, -1)) >= Model.Vmin
+        ) # this is a temporary fix...
         self.grbmodel.addConstr(
             self.y.reshape((Model.S, -1)) <= 
             Smat.T @ y_old.reshape((S_old, -1))

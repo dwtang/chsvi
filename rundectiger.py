@@ -7,18 +7,17 @@ import sys
 from numpy.random import default_rng
 
 from chsvi.models.delaysharing import DelaySharingCPOMDP
-from chsvi.models.condindep import CondIndepCPOMDP
-from chsvi.core import CoordinatorsHeuristicSearchValueIteration
-from chsvi.io import WriteCPOMDP
+from chsvi.core import CHSVI
+import chsvi.presolve
 
-def DecTigerCPOMDP(S=2, d=2):
+
+def DecTigerCPOMDP(S=2, d=2, discount=0.95):
     A1, A2 = S+1, S+1 
     Z1, Z2 = S, S
     PT = np.zeros((S, A1, A2, S))
     PZ1 = np.zeros((A1, A2, S, Z1))
     PZ2 = np.zeros((A1, A2, S, Z2))
     r = np.zeros((S, A1, A2))
-    discount = 0.95
     b0 = np.ones(S) / S # uniform random at start
 
     # state transition
@@ -57,15 +56,36 @@ def DecTigerCPOMDP(S=2, d=2):
 
 
 def main():
-    Model = DecTigerCPOMDP(S=2, d=1)
-    if len(sys.argv) > 1:
-        timeout = float(sys.argv[1])
-    else:
-        timeout = np.inf
-    CoordinatorsHeuristicSearchValueIteration(
-        Model, presolvetime=30, timeout=timeout
-    ) # presolvecalllimit=161
+    tiger1 = DecTigerCPOMDP(S=2, d=1, discount=0.9)
+    tiger2 = DecTigerCPOMDP(S=2, d=2, discount=0.9)
+    
+    Smat = np.zeros((tiger1.S, tiger2.S), dtype=bool)
+    for s2 in range(tiger2.S):
+        state, midx2 = np.unravel_index(s2, shape=tiger2.Sdims)
+        m0, m1 = tiger2.Allmpair[midx2]
+        midx1 = tiger1.Allmpairlookup[(m0[1:], m1[1:])]
+        s1 = np.ravel_multi_index((state, midx1), tiger1.Sdims)
+        Smat[s1, s2] = 1
 
+    presolveres = chsvi.presolve.FullInfoHSVI(
+        tiger1, timeout=8, calllimit=np.inf
+    )
+    Solver1 = CHSVI(tiger1, presolveres=presolveres)
+    Solver1.Solve()
+
+    Solver2 = CHSVI(tiger2, presolveres=(Solver1.VU, Smat))
+    Solver2.Solve()
+
+
+def main1():
+    tiger1 = DecTigerCPOMDP(S=2, d=1, discount=0.95)
+    tiger1.negate()
+
+    presolveres = chsvi.presolve.FullInfoHSVI(
+        tiger1, timeout=8, calllimit=2000
+    )
+    Solver1 = CHSVI(tiger1, presolveres=presolveres)
+    Solver1.Solve()
 
 if __name__ == '__main__':
     main()

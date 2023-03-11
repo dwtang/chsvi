@@ -22,9 +22,12 @@ class UpperBound():
         if presolveres is None:
             presolveres = {
                 "Smat": None,
-                "BT": np.eye(Model.S),
-                "QBar": np.full((Model.S, *Model.A), Model.Vmax),
-                "Qmin": np.full((Model.S, *Model.A), Model.Vmin)
+                "LHS": np.concatenate((np.eye(Model.S), -np.eye(Model.S)), axis=0),
+                "RHS": np.concatenate(
+                    (np.full((Model.S, *Model.A), Model.Vmax),
+                     -np.full((Model.S, *Model.A), Model.Vmin)),
+                    axis=0
+                )
             }
         # return a point-based upper bound on the for certain
         # aggregated belief points (i.e. the belief on aggregated state)
@@ -58,7 +61,7 @@ class UpperBound():
             yg = blp.y.reshape((-1, self.Model.A[stage]))[lin_idx, :] 
             # yg is an S x Ai array representing 
             # y(s, g0(m_s^0), ... , gi-1(m_s^i-1), ai)
-            bMmat = b[:, np.newaxis] * self.Model.Mmat[stage] # S x Mi
+            bMmat = b[:, np.newaxis] * self.Model.MmatT[stage] # S x Mi
             objfunc = ((bMmat @ blp.g) * yg).sum()
             vb = blp.solve(objfunc)
             gb = blp.gsol()
@@ -83,7 +86,7 @@ class UpperBound():
 
     @property
     def numpoints(self):
-        return sum(p.numconstr for p in self._p)
+        return [p.numconstr for p in self._p]
 
     def transfer(self, Model, Smat=None):
         """Transfer to new model with larger state space
@@ -110,7 +113,7 @@ class LowerBound():
         At stage i, alp[i-1] is updated using alp[i]
     """
 
-    def __init__(self, Model):
+    def __init__(self, Model, presolvealp=None):
         self.Model = Model
         # shapes = [
         #     (np.prod((self.Model.S,) + self.Model.A[0:i]), self.Model.A[i], 1) 
@@ -122,8 +125,14 @@ class LowerBound():
         #     for i in range(self.Model.I + 1)
         # ]
         self.timereorg = 0.0
-        self.alp = chsvi.presolve.FixedPrescriptionBound(self.Model)
-        self.reorganize()
+        if presolvealp is None:
+            self.alp = chsvi.presolve.FixedPrescriptionBound(self.Model)
+        else:
+            self.alp = [alp.copy() for alp in presolvealp]
+        self.numalp = [alp.shape[-1] for alp in self.alp]
+        self.prevnumalp = [0 for alp in self.alp]
+        for i in range(-1, self.Model.I):
+            self.reorganize(i)
 
         self.timebackup = 0.0
 
@@ -137,13 +146,19 @@ class LowerBound():
         if stage < self.Model.I:
             # need to write highly vectorized code to ensure speed
             # at the sacrifice of readability...
-            balp = b[:, np.newaxis, np.newaxis] * self.alp[stage][lin_idx] 
+            # print("alp:", self.alp[stage])
+            balp = (b[:, np.newaxis, np.newaxis] * 
+                self.alp[stage][lin_idx][:, :, 0:self.numalp[stage]])
+            # print("balp:", balp) 
             # balp is an S x Ai x V array (V is the number of alpha-vectors)
             # balp[s, ai, alpha] = b(s)alpha(s, ai)
-            mbalp = np.tensordot(self.Model.Mmat[stage].T, balp, axes=1) 
+            mbalp = (self.Model.Mmat[stage] @ balp.reshape((self.Model.S, -1))
+                ).reshape((self.Model.M[stage], self.Model.A[stage], -1))
+            # print("mbalp", mbalp)
             # mbalp is an Mi x Ai x V array
             # mbalp[mi, ai, alpha] = sum_{s:m_s^i = mi} b(s)alpha(s, ai)
             Jalp = np.sum(np.max(mbalp, axis=1), axis=0) # V
+            # print("Jalp:", Jalp)
             # Jalp[alpha] = max_{gi} sum_{s} b(s)alpha(s, gi(m_s^i))
             # ... = sum_{mi} max_{ai} sum_{s:m_s^i = mi} b(s)alpha(s, ai)
             idx = np.argmax(Jalp)
@@ -161,56 +176,66 @@ class LowerBound():
 
         else: # stage == self.Model.I
             self.Model.setbelief(b, g)
-            alpo_idx = np.argmax(self.Model.PObg(self.alp[stage]), axis=1)
+            alpo_idx = np.argmax(
+                self.Model.PObg(self.alp[stage][:, 0:self.numalp[stage]]),
+                axis=1
+            )
             # alpo_idx[o] = index of best alpha-vector under observation o
             newalp = self.Model.Q(self.alp[stage][:, alpo_idx])
             vb = b @ newalp[lin_idx]
 
-        newalp = newalp.reshape(self.alp[stage-1].shape[:-1] + (1,))
-        self.alp[stage-1] = np.concatenate(
-            (self.alp[stage-1], newalp), axis=-1
-        )
-
+        newalp = newalp.reshape(self.alp[stage-1].shape[:-1])
+        self.add(newalp, stage-1)
         self.timebackup += time.time() - tb0
 
-        if self.numalp > 2 * self.prevnumalp + 50:
-            self.reorganize()
+        if self.numalp[stage-1] > 2 * self.prevnumalp[stage-1] + 50:
+            self.reorganize(stage-1)
         return vb
 
     def __getitem__(self, b):
-        return np.max(b @ self.alp[-1])
+        return np.max(b @ self.alp[-1][:, 0:self.numalp[-1]])
 
-    def reorganize(self):
+    def add(self, newalp, i):
+        # print("add to {i}".format(i=i))
+        if self.numalp[i] == self.alp[i].shape[-1]:
+            zeroarray = np.zeros(self.alp[i].shape)
+            self.alp[i] = np.concatenate((self.alp[i], zeroarray), axis=-1)
+        self.alp[i][..., self.numalp[i]] = newalp
+        self.numalp[i] += 1
+
+    def reorganize(self, i):
         """Only alpha vectors that are point-wise dominated are pruned
         """
         t00 = time.time()
         # print("[{0:.3f}s] Prev numalp {1}, current {2}".format(time.time() - self.t0, self.prevnumalp, self.numalp))
         # print("[{0:.3f}s] Reorganizing LowerBound...".format(time.time() - self.t0))    
-        for i in range(self.Model.I + 1):
-            if i == self.Model.I:
-                order = np.argsort(self.alp[i][0, :])
-            else:
-                order = np.argsort(self.alp[i][0, 0, :])
-            self.alp[i] = self.alp[i][..., order]
-            keepdix = [True] * self.alp[i].shape[-1]
-            for v in range(self.alp[i].shape[-1]):
-                for v1 in range(v + 1, self.alp[i].shape[-1]):
-                    if np.all(self.alp[i][..., v] <= self.alp[i][..., v1]):
-                        keepdix[v] = False
-                        break
+        
+        if i == -1:
+            order = np.argsort(self.alp[i][0, 0:self.numalp[i]])
+        else:
+            order = np.argsort(self.alp[i][0, 0, 0:self.numalp[i]])
+        self.alp[i] = self.alp[i][..., order]
+        keepdix = [True] * self.numalp[i]
+        for v in range(self.numalp[i]):
+            for v1 in range(v + 1, self.numalp[i]):
+                if np.all(self.alp[i][..., v] <= self.alp[i][..., v1]):
+                    keepdix[v] = False
+                    break
 
-            self.alp[i] = self.alp[i][..., keepdix]
+        self.alp[i] = self.alp[i][..., keepdix]
+        self.numalp[i] = self.alp[i].shape[-1]
         # print("[{0:.3f}s] Reducing numalp to {1}".format(time.time() - self.t0, self.numalp))
-        self.prevnumalp = self.numalp
+        self.prevnumalp[i] = self.numalp[i]
         self.timereorg += time.time() - t00
     
     @property
-    def numalp(self):
-        return sum(alp.shape[-1] for alp in self.alp)
+    def numalptotal(self):
+        return sum(self.numalp)
 
 
 class CHSVI():
-    def __init__(self, Model, epsilon=None, t0=None, presolveres=None):
+    def __init__(self, Model, epsilon=None, t0=None,
+        presolveres=None, presolvealp=None):
         if t0 is None:
             self.t0 = time.time()
         else:
@@ -221,7 +246,7 @@ class CHSVI():
             self.VU = presolveres[0]
         else: # dictionary
             self.VU = UpperBound(Model, presolveres=presolveres)
-        self.VL = LowerBound(Model)
+        self.VL = LowerBound(Model, presolvealp=presolvealp)
         self.b0 = self.Model.b0
         self.anytime = (epsilon is None)
         self.epsilon = 0.95 * (
@@ -329,7 +354,7 @@ class CHSVI():
         else:
             prefix = "*up* "
         print(prefix + self._belief_and_prescription(b, g, g1))
-        # print("bounds: [{lb:.6f}, {ub:.6f}] target: {eps:.6f}".format(ub=vu, lb=vl, eps=eps))
+        print("bounds: [{lb:.6f}, {ub:.6f}] target: {eps:.6f}".format(ub=vu, lb=vl, eps=eps))
 
     def _belief_and_prescription(self, b, g, g1):
         line = []
@@ -379,27 +404,27 @@ class CHSVI():
         return self.VL[b]
 
 
-def CoordinatorsHeuristicSearchValueIteration(
-        Model,
-        epsilon=None,
-        presolvetime=10,
-        presolvecalllimit=np.inf,
-        timeout=np.inf
-    ):
-    """Heuristic Search Value Iteration Algorithm
+# def CoordinatorsHeuristicSearchValueIteration(
+#         Model,
+#         epsilon=None,
+#         presolvetime=10,
+#         presolvecalllimit=np.inf,
+#         timeout=np.inf
+#     ):
+#     """Heuristic Search Value Iteration Algorithm
 
-    Input:
-        Model: a BaseCPOMDP object
-        epsilon: desired gap (set to None for anytime CHSVI)
-        timeout: time limit in seconds
-    """
-    t0 = time.time()
-    presolveres = chsvi.presolve.FullInfoHSVI(
-        Model, timeout=presolvetime, calllimit=presolvecalllimit
-    )
-    # presolveres = chsvi.presolve.FullInfoMDP(Model)
-    # presolveres = None
-    Solver = CHSVI(Model, epsilon=epsilon, t0=t0, 
-        presolveres=presolveres)
-    Solver.Solve(timeout)
+#     Input:
+#         Model: a BaseCPOMDP object
+#         epsilon: desired gap (set to None for anytime CHSVI)
+#         timeout: time limit in seconds
+#     """
+#     t0 = time.time()
+#     presolveres = chsvi.presolve.FullInfoHSVI(
+#         Model, timeout=presolvetime, calllimit=presolvecalllimit
+#     )
+#     # presolveres = chsvi.presolve.FullInfoMDP(Model)
+#     # presolveres = None
+#     Solver = CHSVI(Model, epsilon=epsilon, t0=t0, 
+#         presolveres=presolveres)
+#     Solver.Solve(timeout)
 

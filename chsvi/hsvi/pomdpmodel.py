@@ -108,3 +108,8 @@ class POMDP():
         bo /= np.sum(bo)
 
         return bo
+
+    def negate(self):
+        self.r = -self.r
+        self.Vmin = np.min(self.r) / (1 - self.discount)
+        self.Vmax = np.max(self.r) / (1 - self.discount)

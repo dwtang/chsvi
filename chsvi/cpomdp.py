@@ -19,7 +19,7 @@ class BaseCPOMDP():
     O: number of common observations
     Mmap: I x S numpy array describing the mapping from augmented
                 states to private states
-    Mmat: list of I matrices, Mmat[i] = S x M[i] 0-1 matrix encoding Mmap[i]
+    Mmat: list of I matrices, Mmat[i] = M[i] x S 0-1 csr matrix encoding Mmap[i]
     discount: number in (0, 1) discount factor
     Vmax, Vmin: crude upper and lower bounds for values
     
@@ -46,12 +46,12 @@ class BaseCPOMDP():
         self.A = r.shape[1:]
         if b0 is not None:
             assert(b0.shape == (self.S,))
-        self.M = tuple(np.max(Mmap, axis=1) + 1)
-        self.Mmap = Mmap
+        
         self.AT = np.prod(self.A)
         self.I = len(self.A)
         self.SA = (self.S, *self.A)
-        self.Mmat = [onehot(Mmap[i], self.M[i]) for i in range(self.I)]
+        self.set_Mmap(Mmap)
+        
         self._P = my_reshape(P)
         self.O = self._P.shape[1] // self.S
         self._r = r.flatten()
@@ -59,6 +59,12 @@ class BaseCPOMDP():
         self.b0 = b0
         self.Vmin = np.min(self._r) / (1 - self.discount)
         self.Vmax = np.max(self._r) / (1 - self.discount)
+
+    def set_Mmap(self, Mmap):
+        self.M = tuple(np.max(Mmap, axis=1) + 1)
+        self.Mmap = Mmap
+        self.Mmat = [onehot(Mmap[i], self.M[i]) for i in range(self.I)]
+        self.MmatT = [mat.T.toarray() for mat in self.Mmat]
 
     def P(self, Y):
         """Compute sum_o sum_{s'}P(s', o|s, a) Y(o. s') 
@@ -127,6 +133,11 @@ class BaseCPOMDP():
     def Qbg(self, y):
         return self.bgr + self.discount * np.sum(y)
 
+    def negate(self):
+        self._r = -self.r
+        self.Vmin = np.min(self._r) / (1 - self.discount)
+        self.Vmax = np.max(self._r) / (1 - self.discount)
+
 
 def my_reshape(P):
     """reshape a numpy array of sparse array into a csr array"""
@@ -136,7 +147,7 @@ def my_reshape(P):
 
 
 def onehot(Mmap, M):
-    mat = np.zeros((Mmap.size, M), dtype=bool)
-    for s in range(mat.shape[0]):
-        mat[s, Mmap[s]] = 1
-    return mat
+    mat = np.zeros((M, Mmap.size), dtype=np.int32)
+    for s in range(Mmap.size):
+        mat[Mmap[s], s] = 1
+    return spsp.csr_matrix(mat)
