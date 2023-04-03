@@ -1,5 +1,9 @@
-"""Coordinator's POMDP Model Implementation
+"""Coordinator's POMDP Model
 
+Input to the CHSVI algorithm.
+
+To use this class, please either use the provided models in models folder
+or inherit the base class and implement the new relaxedPOMDP method
 """
 
 import numpy as np
@@ -36,8 +40,12 @@ class BaseCPOMDP():
         """Initialize BaseCPOMDP
         Input:
             P: S x (A tuple) array of O x S' sparse array 
-            Mmap: I x S array, Mmap[i, s] = m_s^i
-            r: S x (A tuple) array
+                P(s, *a, o, s') = Pr(s', o|s, a)
+            Mmap: I x S array, the mapping from augmented state to private info
+                Mmap[i, s] = m_s^i
+                private info should be encoded into contiguous non-negative integers
+                starting from 0, i.e. M^i = {0, 1, ..., M-1}
+            r: S x (A tuple) array, instantaneous reward
             discount: scalar
             b0: S array or None
         """
@@ -137,6 +145,20 @@ class BaseCPOMDP():
         self._r = -self.r
         self.Vmin = np.min(self._r) / (1 - self.discount)
         self.Vmax = np.max(self._r) / (1 - self.discount)
+
+    def relaxedPOMDP(self):
+        """Returns the full information POMDP
+
+        Output: (Model, Smat)
+            Model: a POMDP instance
+            Smat: S x Sbar 0-1 matrix indicating the mapping from the state
+               here to the state in the relaxed POMDP
+               The value function for this CPOMDP at b can be upper bounded by
+               the value function of relaxed POMDP evaluated at the belief
+               btilde = (this matrix) @ b
+
+        """
+        raise NotImplementedError("Please implement relaxedPOMDP for BaseCPOMDP.")
 
 
 def my_reshape(P):

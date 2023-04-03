@@ -15,21 +15,17 @@ class DelaySharingCPOMDP(BaseCPOMDP):
     Private observations and actions are shared with all other agents with a
     delay of d
 
-    Property:
-        ghint: list of tuples (g1, g2), g1 is an M1 array representing 
-        prescription for player 1
-
     """
-    def __init__(self, PT, PZ, r, d, discount, b0=None, ghint=None):
+    def __init__(self, PT, PZ, r, d, discount, b0=None):
         """Initialize POMDP Model
 
         Input:
-        PT: S x A0 x ... x A(I-1) x S' array
-        PZ: A0 x ... x A(I-1) x S' x Z1 x Z2 array
-        r: S x A0 x ... x A(I-1) numpy array
-        d: Delay, positive integer
-        discount: number in (0, 1)
-        b0: None or S numpy array
+        PT: S x (A tuple) x S' array, transition kernel
+        PZ: (A tuple) x S' x (Z tuple) array, private observation kernel
+        r: S x (A tuple) numpy array, instantaneous reward
+        d: positive integer, delay of information sharing
+        discount: number in (0, 1), discount factor
+        b0: None or S numpy array, initial distribution
         """
         S = PT.shape[0]
         I = len(PT.shape) - 2
@@ -144,7 +140,6 @@ class DelaySharingCPOMDP(BaseCPOMDP):
         # each m pair is a tuple (m0, ... tI-1) where
         # m0 = (za_{-d}, ..., za_{-1}), za_l is the z * Ai + ai l steps ago
         self.Allmpairlookup = Allmpairlookup
-        self.ghint = ghint
 
 
     def get_sbar_idx(self, smtuple):
@@ -173,9 +168,9 @@ class DelaySharingCPOMDP(BaseCPOMDP):
     def relaxedPOMDP(self):
         """Returns the full information POMDP
 
-        Output:
-            0: a POMDP instance
-            1: S x Sbar 0-1 matrix indicating the mapping from the state
+        Output: (Model, Smat)
+            Model: a POMDP instance
+            Smat: S x Sbar 0-1 matrix indicating the mapping from the state
                here to the state in the relaxed POMDP
                The value function for this CPOMDP at b can be upper bounded by
                the value function of relaxed POMDP evaluated at the belief

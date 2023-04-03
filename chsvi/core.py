@@ -234,8 +234,17 @@ class LowerBound():
 
 
 class CHSVI():
-    def __init__(self, Model, epsilon=None, t0=None,
-        presolveres=None, presolvealp=None):
+    """CHSVI Solver"""
+    def __init__(self, Model, zeta=0.85, t0=None, presolveres=None, presolvealp=None):
+        """Args:
+            Model: a BaseCPOMDP object
+            zeta: float, hyperparameter in (0, 1)
+            t0: float, starting time (in unix time)
+            presolveres: (Upperbound, Smat) or dictionary
+                upper bound presolve solution used for upper bound initialization
+            presolvealp: same format as LowerBound.alp
+                alpha-vectors for lower bound initialization
+        """
         if t0 is None:
             self.t0 = time.time()
         else:
@@ -248,28 +257,30 @@ class CHSVI():
             self.VU = UpperBound(Model, presolveres=presolveres)
         self.VL = LowerBound(Model, presolvealp=presolvealp)
         self.b0 = self.Model.b0
-        self.anytime = (epsilon is None)
-        self.epsilon = 0.95 * (
-            self.VU[self.b0] - self.VL[self.b0]
-        ) if self.anytime else epsilon
-        # self.epsilon = 1
+        self.zeta = zeta  # hyperparameter
         self.pathcount = 0
         self.nodecount = 0
         self.prevnodecount = 0
         self.timeheuristic = 0.0
         print("[{0:.3f}s] Initialization complete!".format(time.time() - self.t0))
         
-    def Solve(self, timeout=np.inf):
-        gap = np.inf
-        while gap > self.epsilon:
+
+    def Solve(self, timeout=np.inf, targetgap=0.0):
+        """Run the CHSVI algorithm after initialization
+
+        Args:
+            timeout: time limit in seconds
+            targetgap: float, terminates algorithm when gap is smaller than targetgap
+        """
+        epsilon = self.zeta * (self.VU[self.b0] - self.VL[self.b0])
+        while True:
             try:
-                self.Explore(self.b0, (), self.epsilon)
+                self.Explore(self.b0, (), epsilon)
                 self.pathcount += 1
                 self.prevnodecount = self.nodecount
                 vu, vl = self.VU[self.b0], self.VL[self.b0]
                 gap = vu - vl
-                if self.anytime:
-                    self.epsilon = 0.85 * gap
+                epsilon = self.zeta * gap
                 print(
                     ("[{0:.3f}s] {1} calls at root, {2} total calls, " + 
                     "LB: {3:.6f}, UB: {4:.6f}, gap: {5:.6f}").format(
@@ -281,11 +292,17 @@ class CHSVI():
                         time.time() - self.t0, self.VL.numalp, self.VU.numpoints
                     )
                 )
+                if gap <= targetgap:
+                    print("[{0:.3f}s] Target gap met. Terminating Algorithm".format(
+                        time.time() - self.t0
+                    ))
+                    break
                 if time.time() - self.t0 > timeout:
                     print("[{0:.3f}s] Timeout! Terminating Algorithm".format(
                         time.time() - self.t0
                     ))
                     break
+
             except OptimizationError as e:
                 print(
                     "[{0:.3f}s] OptimizationError: {1}, ".format(
@@ -306,16 +323,9 @@ class CHSVI():
         print("Explore path count: {0}".format(self.pathcount))
         print("Explore node count: {0}".format(self.nodecount))
         print("Algorithm Time: {0:.3f}s".format(t1 - self.t0))
-        # print("Time spent on Upper Bound Access: {0:.3f}s".format(
-        #     self.VU.timespentonlp)
-        # )
-        # print("Number of Upper Bound Accesses: {0}".format(self.VU.numlps))
         print("Time spent on Upper Bound Update: {0:.3f}s".format(
             self.VU.timeupdate)
         )
-        # print("Time spent on Upper Bound Reorg: {0:.3f}s".format(
-        #     self.VU.timereorg)
-        # )
         print("Time spent on Lower Bound Backup: {0:.3f}s".format(
             self.VL.timebackup)
         )
@@ -349,6 +359,7 @@ class CHSVI():
         # self._debug_print(b, g, g1, eps, vub1, vlb1, False)
 
     def _debug_print(self, b, g, g1, eps, vu, vl, down):
+        """For debug purpose"""
         if down:
             prefix = "*down* depth: {0} belief: ".format(self.nodecount - self.prevnodecount - 1)
         else:
@@ -357,6 +368,7 @@ class CHSVI():
         print("bounds: [{lb:.6f}, {ub:.6f}] target: {eps:.6f}".format(ub=vu, lb=vl, eps=eps))
 
     def _belief_and_prescription(self, b, g, g1):
+        """For debug purpose"""
         line = []
         if g1 is None:
             for s in range(self.Model.S):
@@ -402,29 +414,4 @@ class CHSVI():
         if b is None:
             b = self.b0
         return self.VL[b]
-
-
-# def CoordinatorsHeuristicSearchValueIteration(
-#         Model,
-#         epsilon=None,
-#         presolvetime=10,
-#         presolvecalllimit=np.inf,
-#         timeout=np.inf
-#     ):
-#     """Heuristic Search Value Iteration Algorithm
-
-#     Input:
-#         Model: a BaseCPOMDP object
-#         epsilon: desired gap (set to None for anytime CHSVI)
-#         timeout: time limit in seconds
-#     """
-#     t0 = time.time()
-#     presolveres = chsvi.presolve.FullInfoHSVI(
-#         Model, timeout=presolvetime, calllimit=presolvecalllimit
-#     )
-#     # presolveres = chsvi.presolve.FullInfoMDP(Model)
-#     # presolveres = None
-#     Solver = CHSVI(Model, epsilon=epsilon, t0=t0, 
-#         presolveres=presolveres)
-#     Solver.Solve(timeout)
 

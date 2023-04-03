@@ -92,6 +92,7 @@ class UpperBound():
         minalp = FastInformedBound(self.M, maximizing=False)
         self.Vmin = np.min(minalp, axis=-1)
         self._lp = grb.Model("upper bound")
+        self._lp.setParam("OutputFlag", 0)
         self._y = self._lp.addMVar(shape=(self.M.S,), vtype=grb.GRB.CONTINUOUS,
                                    lb=-np.inf, name="y")
         self._lp.addConstr(self._y >= self.Vmin)
@@ -298,16 +299,12 @@ class LowerBound():
 
 
 class HSVI():
-    def __init__(self, M, epsilon=None, t0=time.time()):
+    def __init__(self, M, t0):
         self.M = M
         self.VU = UpperBound(self.M, t0)
         self.VL = LowerBound(self.M, t0)
         self.b0 = self.M.b
-        self.anytime = (epsilon is None)
-        self.epsilon = 0.95 * (
-            self.VU[self.b0] - self.VL[self.b0]
-        ) if self.anytime else epsilon
-        # self.epsilon = 1
+        self.zeta = 0.95
         self.pathcount = 0
         self.nodecount = 0
         self.t0 = t0
@@ -319,16 +316,15 @@ class HSVI():
         # between (-1, 0]. 0 is HSVI as it was presented in the paper
         # ee < 0 means that we allow larger gaps for smaller 
         
-    def Solve(self, timeout=np.inf, calllimit=np.inf):
-        gap = np.inf
-        while gap > self.epsilon:
+    def Solve(self, timeout=np.inf, calllimit=np.inf, targetgap=0.0):
+        epsilon = self.zeta * (self.VU[self.b0] - self.VL[self.b0])
+        while True:
             try:
-                self.Explore(self.b0, self.epsilon)
+                self.Explore(self.b0, epsilon)
                 self.pathcount += 1
                 vu, vl = self.VU[self.b0], self.VL[self.b0]
                 gap = vu - vl
-                if self.anytime:
-                    self.epsilon = 0.95 * gap
+                epsilon = self.zeta * gap
                 print(
                     ("[{0:.3f}s] {1} calls, LB: {2:.3f}, UB: {3:.3f}," + 
                     " gap: {4:.3f}").format(
@@ -339,6 +335,11 @@ class HSVI():
                         time.time() - self.t0, self.VL.numalp, self.VU.numpoints
                     )
                 )
+                if gap <= targetgap:
+                    print("[{0:.3f}s] Target gap met. Terminating Algorithm".format(
+                        time.time() - self.t0
+                    ))
+                    break
                 if time.time() - self.t0 > timeout or self.pathcount >= calllimit:
                     print("[{0:.3f}s] Timeout! Terminating Algorithm".format(
                         time.time() - self.t0
@@ -452,8 +453,7 @@ def _print_belief(b):
         return "[...]"
 
 
-def HeuristicSearchValueIteration(M, epsilon=None, timeout=np.inf,
-                                  calllimit=np.inf, ret="LB"):
+def HeuristicSearchValueIteration(M, timeout=np.inf, calllimit=np.inf, targetgap=0.0, ret="LB"):
     """Heuristic Search Value Iteration Algorithm
 
     Input:
@@ -477,8 +477,8 @@ def HeuristicSearchValueIteration(M, epsilon=None, timeout=np.inf,
         timeout: time limit in seconds
     """
     t0 = time.time()
-    Solver = HSVI(M, epsilon, t0)
-    Solver.Solve(timeout, calllimit)
+    Solver = HSVI(M, t0)
+    Solver.Solve(timeout, calllimit, targetgap)
     if ret == "UB":
         return Solver.VU.output()
     else:

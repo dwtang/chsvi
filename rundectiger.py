@@ -1,17 +1,28 @@
-"""Testing Coordinator's HSVI on DecTiger with delayed information sharing
-
+"""Running CHSVI Algorithm on DecTiger with delayed information sharing
+described in the paper
 """
 
 import numpy as np
-import sys
 from numpy.random import default_rng
+import sys
+import time
 
 from chsvi.models.delaysharing import DelaySharingCPOMDP
 from chsvi.core import CHSVI
-import chsvi.presolve
+from chsvi.presolve import FullInfoHSVI
 
 
-def DecTigerCPOMDP(S=2, d=2, discount=0.95):
+def DecTigerCPOMDP(S, d, discount=0.9):
+    """DecTiger with delayed information sharing
+
+    Args:
+        S: number of doors
+        d: delay
+        discount: discount factor
+
+    Returns:
+        A DelaySharingCPOMDP model
+    """
     A1, A2 = S+1, S+1 
     Z1, Z2 = S, S
     PT = np.zeros((S, A1, A2, S))
@@ -28,13 +39,13 @@ def DecTigerCPOMDP(S=2, d=2, discount=0.95):
     # observation distribution
     PZ1[...] = 1/S # uniform by default
     PZ1[-1, -1, :, :] = (0.7 * np.eye(S) + 0.15) / (0.7 + 0.15 * S)
-    # except that if both agents are listening then one can get the correct
-    # door with prob 0.85, and wrong result with prob 0.15
+    # except that if both agents are listening
 
+    # create the observation matrix PZ: A1 x A2 x S x Z1 x Z2
     PZ2 = PZ1.copy()
     PZ = PZ1.reshape((A1, A2, S, Z1, 1)) * PZ2.reshape((A1, A2, S, 1, Z2))
 
-    # reward
+    # create instantaneous reward
     ipad = 10 / (S-1)
     tiger = -100
     listeningcost = 1
@@ -49,43 +60,21 @@ def DecTigerCPOMDP(S=2, d=2, discount=0.95):
         r[i, i, S] = tiger - listeningcost
         r[i, S, S] = -2 * listeningcost
 
-    # print(r[0])
-    # print(r[1])
-
     return DelaySharingCPOMDP(PT, PZ, r, d, discount, b0)
 
-
 def main():
-    tiger1 = DecTigerCPOMDP(S=2, d=1, discount=0.9)
-    tiger2 = DecTigerCPOMDP(S=2, d=2, discount=0.9)
-    
-    Smat = np.zeros((tiger1.S, tiger2.S), dtype=bool)
-    for s2 in range(tiger2.S):
-        state, midx2 = np.unravel_index(s2, shape=tiger2.Sdims)
-        m0, m1 = tiger2.Allmpair[midx2]
-        midx1 = tiger1.Allmpairlookup[(m0[1:], m1[1:])]
-        s1 = np.ravel_multi_index((state, midx1), tiger1.Sdims)
-        Smat[s1, s2] = 1
-
-    presolveres = chsvi.presolve.FullInfoHSVI(
-        tiger1, timeout=8, calllimit=np.inf
-    )
-    Solver1 = CHSVI(tiger1, presolveres=presolveres)
-    Solver1.Solve()
-
-    Solver2 = CHSVI(tiger2, presolveres=(Solver1.VU, Smat))
-    Solver2.Solve()
-
-
-def main1():
-    tiger1 = DecTigerCPOMDP(S=2, d=1, discount=0.95)
-    tiger1.negate()
-
-    presolveres = chsvi.presolve.FullInfoHSVI(
-        tiger1, timeout=8, calllimit=2000
-    )
-    Solver1 = CHSVI(tiger1, presolveres=presolveres)
-    Solver1.Solve()
+    S, d, discount = int(sys.argv[1]), int(sys.argv[2]), float(sys.argv[3])
+    # generate a BasePOMDP model
+    Tiger = DecTigerCPOMDP(S, d, discount)
+    # time keeping (optional)
+    t0 = time.time()
+    # Presolve a full information POMDP to initialize the upper bound 
+    # (optional but recommended)
+    presolveres = FullInfoHSVI(Tiger, targetgap=0.01)
+    # Initialize the CHSVI solver with the presolve solution 
+    Solver = CHSVI(Tiger, t0=t0, presolveres=presolveres)
+    # Solve the coordinator's POMDP
+    Solver.Solve(targetgap=0.01, timeout=86400)
 
 if __name__ == '__main__':
     main()

@@ -1,6 +1,9 @@
-"""Conditional Independent State Model of Ouyang
+"""Control Sharing Model
 
-Each agent has a private controlled Markov Chain. Actions are public.
+Each agent has a controlled Markov Chain. Actions are public.
+See A. Mahajan, “Optimal decentralized control of coupled subsystems
+with control sharing,” IEEE Trans. Automat. Contr., vol. 58, no. 9, pp.
+2377–2382, 2013.
 
 """
 
@@ -12,11 +15,14 @@ from chsvi.cpomdp import BaseCPOMDP
 from chsvi.hsvi import POMDP
 
 class CondIndepCPOMDP(BaseCPOMDP):
+    """Conditionally independent coordinator's POMDP Model
+    """
+
     def __init__(self, S, A, PT, r, discount, b0):
         """
         Input:
-            S: (S0, S1)
-            A: (A0, A1)
+            S: tuple of 2 integers, denoting the size of state spaces
+            A: tuple of 2 integers, denoting the size of action spaces
             PT: list of numpy matrices Si x (Atuple) x Si
             r: S tuple x A tuple numpy array
             b0: list of Si vector
@@ -89,4 +95,4 @@ class CondIndepCPOMDP(BaseCPOMDP):
             r=self.original_params["r"].reshape((self.S, -1)), 
             discount=self.discount
         )
-        return MDP, np.eye(self.S, dtype=bool)
+        return MDP, None

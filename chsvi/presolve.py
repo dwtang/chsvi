@@ -6,7 +6,7 @@ from chsvi.hsvi import POMDP, HeuristicSearchValueIteration
 from chsvi.cpomdp import BaseCPOMDP
 
 
-def FullInfoHSVI(Model, timeout=10, calllimit=np.inf):
+def FullInfoHSVI(Model, timeout=50000, calllimit=np.inf, targetgap=0.01):
     """Find full information POMDP upper bound for the value functions
 
     Input: 
@@ -15,7 +15,6 @@ def FullInfoHSVI(Model, timeout=10, calllimit=np.inf):
         MDP please use FullInfoMDP instead)
     """
 
-    # Create a POMDP model assuming information are shared without delay
     info = "Presolving a full information POMDP with HSVI for upper bound initialization for "
     if timeout != np.inf:
         info += "{0} seconds".format(timeout)
@@ -26,12 +25,13 @@ def FullInfoHSVI(Model, timeout=10, calllimit=np.inf):
     
     print(info)
 
+    # Create a POMDP model assuming information are shared without delay
     FIModel, Smat = Model.relaxedPOMDP() # a pomdp
     resmax = HeuristicSearchValueIteration(FIModel, 
-        timeout=timeout, calllimit=calllimit, ret="UB")
+        timeout=timeout, calllimit=calllimit, targetgap=targetgap, ret="UB")
     FIModel.negate()
     resmin = HeuristicSearchValueIteration(FIModel, 
-        timeout=timeout, calllimit=calllimit, ret="UB")
+        timeout=timeout, calllimit=calllimit, targetgap=targetgap, ret="UB")
 
     res = {
         "Smat": Smat,
@@ -43,19 +43,18 @@ def FullInfoHSVI(Model, timeout=10, calllimit=np.inf):
         )
     }
 
-    return res # dict with keys "Smat", "BT", "vBar", "QBar", "vmin", "Qmin" 
+    return res 
 
 def FullInfoMDP(Model):
-    FIModel, Amat = Model.relaxedPOMDP() # could be a pomdp or mdp
+    FIModel, Smat = Model.relaxedPOMDP() # could be a pomdp or mdp
     # value iteration
-    Vub = ValueIteration(FIModel)
-    Vlb = ValueIteration(FIModel, maximizing=False)
+    Qub = ValueIteration(FIModel)
+    Qlb = ValueIteration(FIModel, maximizing=False)
     
-    # TODO: change this to new interface
     res = {
-        "Smat": Amat,
-        "LHS": np.eye(FIModel.S),
-        "RHS": Vub,
+        "Smat": Smat,
+        "LHS": np.concatenate((np.eye(FIModel.S), -np.eye(FIModel.S)), axis=0),
+        "RHS": np.concatenate((Qub, -Qlb), axis=0)
     }
     return res
 
@@ -66,14 +65,15 @@ def ValueIteration(MDP, maximizing=True):
         V = MDP.Vmax * np.ones(MDP.S)
         optimize = lambda x : np.max(x, axis=-1)
     else:
-        V = MDP.Vmax * np.ones(MDP.S)
+        V = MDP.Vmin * np.ones(MDP.S)
         optimize = lambda x : np.min(x, axis=-1)
     while True:
         V1 = optimize(MDP.rPlusGammaTimes(PT @ V))
         if np.sum(np.abs(V1 - V)) < 1e-5:
             break
         V = V1
-    return V
+    Q = MDP.rPlusGammaTimes(PT @ V)
+    return Q
 
 
 
@@ -141,16 +141,21 @@ def FixedPrescriptionBound(Model, preset=None):
 
 
 class MoreInfoCPOMDP(BaseCPOMDP):
+    """Construct a new coordinator's POMDP by refining observations
+
+    Can be useful in bound initialization.
+    """
     def __init__(self, CPOMDP, Omap):
+        """Args:
+            CPOMDP: A BaseCPOMDP model
+            Omap: CPOMDP.S numpy array, a mapping representing an 
+            additional common observation
+        """
         assert(Omap.size == CPOMDP.S)
         newO = np.max(Omap) + 1
 
         _P = spsp.coo_matrix(CPOMDP._P)
         newP = [None for no in range(newO)]
-        # Masks = [spsp.lil_matrix(_P.shape, dtype=bool) for no in range(newO)]
-        # for no in range(newO):
-        #     for o in range(CPOMDP.O):
-        #         Masks[no][:, o * CPOMDP.S + partition[no]] = 1
 
         newcol = [Omap[c % CPOMDP.S] * _P.shape[1] + c for c in _P.col]
         _newP = spsp.coo_matrix(

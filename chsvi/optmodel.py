@@ -1,8 +1,11 @@
 """Optimization Models
 
 All calls to Gurobi optimization studio is wrapped in the classes defined in this
-file. To replace Gurobi with something else, only the classes in this file needs
+file. To replace Gurobi with something else (CPLEX), only the classes in this file needs
 to be reimplemented, no other files need to change.
+
+Efficiency of solving linear and bilinear programs are essential for this algorithm.
+Therefore, usage of non-commercial linear or bilinear solvers are not recommended.
 
 """
 import numpy as np
@@ -21,6 +24,7 @@ class OptimizationModel():
     """
     def __init__(self, name):
         self.grbmodel = grb.Model(name)
+        self.grbmodel.setParam("OutputFlag", 0)
         self.grbmodel.setAttr("ModelSense", grb.GRB.MAXIMIZE)
         self.constrbank = {}
         self.constrcounter = 0
