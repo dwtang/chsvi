@@ -190,6 +190,7 @@ def WriteCPOMDP(Model, filename):
 
     # state transition and rewards
     for j in range(newA):
+        print("working on prescription #{0} of {1}".format(j, newA))
         Saidx = Model.SAIndex(prespairs[j])
         PSj = Model._P[Saidx] # O*S
         for news in range(newS):
