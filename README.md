@@ -2,7 +2,7 @@
 
 Coordinator's Heuristic Search Value Iteration: an anytime algorithm for multi-agent control problems
 
-Based on *D. Tang, A. Nayyar, R. Jain, A Novel Point-based Algorithm for Multi-agent Control Using the Common Information Approach* [link to paper](https://dwtang.github.io/chsvicdc2023.pdf)
+Based on *D. Tang, A. Nayyar, R. Jain, A Novel Point-based Algorithm for Multi-agent Control Using the Common Information Approach* [link to paper](https://arxiv.org/abs/2304.04346)
 
 Dependency: 
 - numpy, scipy
